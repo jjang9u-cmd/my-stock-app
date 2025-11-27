@@ -4,10 +4,13 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 
-# --- 1. 앱 설정 ---
+# --- 1. 앱 설정 (반드시 맨 위) ---
 st.set_page_config(layout="wide", page_title="Insight Alpha Pro")
 
-# --- 2. CSS 스타일 ---
+# --- 2. 화면이 나오는지 확인용 (제목 먼저 출력) ---
+st.title("🦅 Insight Alpha: Pro Terminal")
+
+# --- 3. CSS 스타일 (화면 꾸미기) ---
 st.markdown("""
 <style>
     .main { background-color: #ffffff; color: #333; }
@@ -77,7 +80,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 헬퍼 함수 ---
+# --- 4. 헬퍼 함수 ---
 def format_large_number(num):
     if num is None: return "N/A"
     if num >= 1e12: return f"${num/1e12:.2f}T"
@@ -105,71 +108,173 @@ def get_grade(score):
     elif score >= 40: return "D"
     else: return "F"
 
-# --- 4. 데이터 분석 엔진 (에러 방지를 위해 try 제거) ---
+# --- 5. 데이터 분석 엔진 ---
 def analyze_data(ticker):
-    # 주식 객체 생성
-    stock = yf.Ticker(ticker)
-    info = stock.info
-    
-    # 필수 데이터 체크
-    if 'currentPrice' not in info:
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        
+        if 'currentPrice' not in info:
+            return None
+
+        # [1] Valuation
+        peg = info.get('pegRatio')
+        per = info.get('forwardPE')
+        ps = info.get('priceToSalesTrailing12Months')
+        
+        val_score = 50
+        val_detail = "N/A"
+        
+        if peg is not None:
+            ratio = peg / 1.0
+            if ratio <= 0.5: val_score = 100
+            elif ratio <= 0.8: val_score = 90
+            elif ratio <= 1.0: val_score = 80
+            elif ratio <= 1.5: val_score = 60
+            elif ratio <= 2.0: val_score = 40
+            else: val_score = 20
+            val_detail = f"PEG: {peg:.2f}"
+        elif per is not None:
+            ratio = per / 20.0
+            if ratio <= 0.5: val_score = 100
+            elif ratio <= 0.8: val_score = 90
+            elif ratio <= 1.0: val_score = 80
+            elif ratio <= 1.5: val_score = 60
+            elif ratio <= 2.0: val_score = 40
+            else: val_score = 20
+            val_detail = f"P/E: {per:.1f}"
+        elif ps is not None:
+            ratio = ps / 5.0
+            if ratio <= 0.5: val_score = 100
+            elif ratio <= 0.8: val_score = 90
+            elif ratio <= 1.0: val_score = 80
+            elif ratio <= 1.5: val_score = 60
+            elif ratio <= 2.0: val_score = 40
+            else: val_score = 20
+            val_detail = f"P/S: {ps:.1f}"
+
+        # [2] Profitability
+        gm = info.get('grossMargins', 0) * 100
+        prof_score = min(100, max(20, (gm / 50) * 80 + 20))
+        
+        # [3] Growth
+        rev_g = info.get('revenueGrowth', 0) * 100
+        grow_score = min(100, max(20, (rev_g / 20) * 80 + 20))
+        
+        # [4] Momentum
+        mom_val = 0
+        mom_score = 50
+        try:
+            hist = stock.history(period="1y")
+            if not hist.empty:
+                start = hist['Close'].iloc[0]
+                end = hist['Close'].iloc[-1]
+                mom_val = ((end - start) / start) * 100
+                mom_score = min(100, max(20, (mom_val / 40) * 60 + 40))
+        except:
+            pass
+            
+        # [5] Safety
+        de = info.get('debtToEquity')
+        safe_score = 50
+        safe_detail = "N/A"
+        if de is not None:
+            score_calc = 100 - ((de - 50) / 150 * 80)
+            safe_score = min(100, max(20, score_calc))
+            safe_detail = f"D/E: {de:.1f}%"
+
+        final_score = (val_score * 0.3) + (prof_score * 0.25) + (grow_score * 0.2) + (mom_score * 0.15) + (safe_score * 0.1)
+        
+        return {
+            "info": info,
+            "final_score": int(final_score),
+            "scores": [val_score, prof_score, grow_score, mom_score, safe_score],
+            "details": [val_detail, f"Margin: {gm:.1f}%", f"Rev Growth: {rev_g:.1f}%", f"1Y Return: {mom_val:.1f}%", safe_detail]
+        }
+
+    except Exception:
         return None
 
-    # [1] Valuation
-    peg = info.get('pegRatio')
-    per = info.get('forwardPE')
-    ps = info.get('priceToSalesTrailing12Months')
-    
-    val_score = 50
-    val_detail = "N/A"
-    
-    # 평가 로직 (들여쓰기 주의)
-    if peg is not None:
-        ratio = peg / 1.0
-        if ratio <= 0.5: val_score = 100
-        elif ratio <= 0.8: val_score = 90
-        elif ratio <= 1.0: val_score = 80
-        elif ratio <= 1.5: val_score = 60
-        elif ratio <= 2.0: val_score = 40
-        else: val_score = 20
-        val_detail = f"PEG: {peg:.2f}"
-    elif per is not None:
-        ratio = per / 20.0
-        if ratio <= 0.5: val_score = 100
-        elif ratio <= 0.8: val_score = 90
-        elif ratio <= 1.0: val_score = 80
-        elif ratio <= 1.5: val_score = 60
-        elif ratio <= 2.0: val_score = 40
-        else: val_score = 20
-        val_detail = f"P/E: {per:.1f}"
-    elif ps is not None:
-        ratio = ps / 5.0
-        if ratio <= 0.5: val_score = 100
-        elif ratio <= 0.8: val_score = 90
-        elif ratio <= 1.0: val_score = 80
-        elif ratio <= 1.5: val_score = 60
-        elif ratio <= 2.0: val_score = 40
-        else: val_score = 20
-        val_detail = f"P/S: {ps:.1f}"
+# --- 6. 입력 화면 ---
+col1, col2 = st.columns([1, 4])
+with col1:
+    with st.form(key='search_form'):
+        ticker = st.text_input("티커 (Ticker)", placeholder="AAPL").upper()
+        submit = st.form_submit_button("🔍 분석 시작")
 
-    # [2] Profitability
-    gm = info.get('grossMargins', 0) * 100
-    prof_score = min(100, max(20, (gm / 50) * 80 + 20))
+if submit:
+    if not ticker:
+        st.warning("티커를 입력해주세요.")
+        st.stop()
+        
+    with st.spinner(f"분석 중... ({ticker})"):
+        data = analyze_data(ticker)
+        
+    if data is None:
+        st.error("데이터를 찾을 수 없습니다. 올바른 티커인지 확인해주세요.")
+        st.stop()
+        
+    info = data["info"]
+    final_score = data["final_score"]
+    scores = data["scores"]
+    details = data["details"]
     
-    # [3] Growth
-    rev_g = info.get('revenueGrowth', 0) * 100
-    grow_score = min(100, max(20, (rev_g / 20) * 80 + 20))
+    st.markdown(f"## {info.get('shortName')} ({ticker})")
     
-    # [4] Momentum
-    mom_val = 0
-    mom_score = 50
-    # 모멘텀 계산은 별도로 예외 처리 (데이터 없을 수 있음)
-    try:
-        hist = stock.history(period="1y")
-        if not hist.empty:
-            start_p = hist['Close'].iloc[0]
-            end_p = hist['Close'].iloc[-1]
-            mom_val = ((end_p - start_p) / start_p) * 100
-            mom_score = min(100, max(20, (mom_val / 40) * 60 + 40))
-    except:
-        pass
+    h1, h2, h3, h4 = st.columns(4)
+    cur = info.get('currentPrice')
+    tar = info.get('targetMeanPrice')
+    
+    h1.metric("Current Price", f"${cur}")
+    if tar:
+        up = ((tar - cur) / cur) * 100
+        h2.metric("Target Price", f"${tar}", f"{up:+.1f}%")
+    else:
+        h2.metric("Target Price", "N/A")
+        
+    h3.metric("Market Cap", format_large_number(info.get('marketCap')))
+    h4.metric("Sector", info.get('sector', 'N/A'))
+    
+    st.divider()
+    
+    c_left, c_right = st.columns([1, 1])
+    
+    with c_left:
+        gauge_color = get_color(final_score)
+        fig = go.Figure(go.Indicator(
+            mode = "gauge+number",
+            value = final_score,
+            title = {'text': "<b>Quant Score</b>", 'font': {'size': 24, 'color': '#333'}},
+            gauge = {
+                'axis': {'range': [0, 100], 'tickwidth': 1},
+                'bar': {'color': gauge_color},
+                'bgcolor': "white",
+                'borderwidth': 2,
+                'bordercolor': "#eee",
+                'steps': [
+                    {'range': [0, 50], 'color': '#ffebee'},
+                    {'range': [50, 80], 'color': '#fffde7'},
+                    {'range': [80, 100], 'color': '#e8f5e9'}
+                ],
+            }
+        ))
+        fig.update_layout(height=300, margin=dict(t=50, b=20, l=30, r=30))
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with c_right:
+        if final_score >= 80:
+            rt = "STRONG BUY"
+            rd = "강력 매수 추천"
+            rc = "#00C853"
+        elif final_score >= 60:
+            rt = "BUY"
+            rd = "매수 고려"
+            rc = "#64DD17"
+        elif final_score <= 40:
+            rt = "SELL"
+            rd = "매도 / 비중 축소"
+            rc = "#FF3D00"
+        else:
+            rt = "HOLD"
+            rd = "관망 필요"
+            rc = "#FFD600
