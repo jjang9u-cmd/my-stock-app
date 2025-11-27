@@ -11,16 +11,17 @@ st.set_page_config(layout="wide", page_title="Insight Alpha Pro")
 st.markdown("""
 <style>
     .main { background-color: #ffffff; color: #333; }
-    .recommendation-box {
+    .rec-box {
         padding: 20px;
         border-radius: 12px;
         text-align: center;
         margin: 20px 0;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        color: white;
     }
-    .rec-title { font-size: 32px; font-weight: 900; margin-bottom: 5px; color: white; text-shadow: 1px 1px 2px rgba(0,0,0,0.2); }
-    .rec-desc { font-size: 18px; font-weight: 500; color: white; }
-    .metric-container {
+    .rec-title { font-size: 32px; font-weight: 900; margin-bottom: 5px; text-shadow: 1px 1px 2px rgba(0,0,0,0.2); }
+    .rec-desc { font-size: 18px; font-weight: 500; }
+    .metric-card {
         border: 1px solid #e0e0e0;
         border-radius: 10px;
         padding: 15px;
@@ -63,14 +64,14 @@ def get_grade(score):
     elif score >= 40: return "D"
     else: return "F"
 
-# --- 4. 데이터 분석 로직 (안전한 계산 방식) ---
+# --- 4. 데이터 계산 로직 ---
 def calculate_scores(info, stock):
-    # 1. Valuation (PEG 우선 -> 없으면 PER -> 없으면 PS)
+    # 1. Valuation
     peg = info.get('pegRatio')
     per = info.get('forwardPE')
     ps = info.get('priceToSalesTrailing12Months')
     
-    val_score = 50 # 기본값
+    val_score = 50
     val_detail = "N/A"
 
     if peg is not None:
@@ -111,20 +112,18 @@ def calculate_scores(info, stock):
     grow_score = (rev_g / 20) * 80 + 20
     grow_score = min(100, max(20, grow_score))
     
-    # 4. Momentum (1년 수익률)
+    # 4. Momentum
     mom_val = 0
     mom_score = 50
     try:
         hist = stock.history(period="1y")
         if not hist.empty:
-            p_start = hist['Close'].iloc[0]
-            p_end = hist['Close'].iloc[-1]
-            mom_val = ((p_end - p_start) / p_start) * 100
-            # 40% 이상 오르면 100점
+            p_s = hist['Close'].iloc[0]
+            p_e = hist['Close'].iloc[-1]
+            mom_val = ((p_e - p_s) / p_s) * 100
             mom_score = (mom_val / 40) * 60 + 40
             mom_score = min(100, max(20, mom_score))
-    except:
-        pass
+    except: pass
     
     # 5. Safety
     de = info.get('debtToEquity')
@@ -135,14 +134,8 @@ def calculate_scores(info, stock):
         safe_score = min(100, max(20, safe_score))
         safe_detail = f"D/E: {de:.1f}%"
 
-    # [에러 수정 핵심] 한 줄씩 계산해서 합침 (괄호 문제 원천 차단)
-    s1 = val_score * 0.3
-    s2 = prof_score * 0.25
-    s3 = grow_score * 0.2
-    s4 = mom_score * 0.15
-    s5 = safe_score * 0.1
-    
-    final_score = int(s1 + s2 + s3 + s4 + s5)
+    # 종합 점수
+    final_score = int(val_score*0.3 + prof_score*0.25 + grow_score*0.2 + mom_score*0.15 + safe_score*0.1)
     
     return {
         "final": final_score,
@@ -153,92 +146,67 @@ def calculate_scores(info, stock):
 # --- 5. 메인 UI ---
 st.title("🦅 Insight Alpha: Pro Terminal")
 
-col_input, col_space = st.columns([1, 4])
-with col_input:
+col1, col2 = st.columns([1, 4])
+with col1:
     with st.form(key='search_form'):
         ticker = st.text_input("티커 (Ticker)", placeholder="예: AAPL").upper()
         submit_button = st.form_submit_button(label='🔍 분석 (Analyze)')
 
+# --- 6. 분석 로직 실행 (들여쓰기 제거로 에러 방지) ---
 if submit_button:
     if not ticker:
         st.warning("티커를 입력해주세요.")
         st.stop()
 
+    info = None
+    stock = None
+    
+    # 데이터 가져오기 (여기만 작은 try 사용)
     try:
-        with st.spinner(f"분석 중... ({ticker})"):
+        with st.spinner(f"데이터 수집 중... ({ticker})"):
             stock = yf.Ticker(ticker)
             info = stock.info
-            
-            if 'currentPrice' not in info:
-                st.error("데이터를 찾을 수 없습니다.")
-                st.stop()
-            
-            # 계산 실행
-            res = calculate_scores(info, stock)
-            final_score = res["final"]
-            scores = res["scores"]
-            details = res["details"]
-            
-            # --- UI 출력 ---
-            st.markdown(f"## {info.get('shortName')} ({ticker})")
-            
-            # 헤더 정보
-            h1, h2, h3, h4 = st.columns(4)
-            cur_p = info.get('currentPrice')
-            tar_p = info.get('targetMeanPrice')
-            
-            h1.metric("Current Price", f"${cur_p}")
-            if tar_p:
-                upside = ((tar_p - cur_p) / cur_p) * 100
-                h2.metric("Target Price", f"${tar_p}", f"{upside:+.1f}%")
-            else:
-                h2.metric("Target Price", "N/A")
-            h3.metric("Market Cap", format_market_cap(info.get('marketCap')))
-            h4.metric("Sector", info.get('sector', 'N/A'))
-            
-            st.divider()
+    except Exception as e:
+        st.error(f"데이터 통신 오류: {e}")
+        st.stop()
+        
+    if info is None or 'currentPrice' not in info:
+        st.error("데이터를 찾을 수 없습니다. 티커를 확인해주세요.")
+        st.stop()
 
-            # 게이지 & 추천
-            c_left, c_right = st.columns([1, 1])
-            
-            with c_left:
-                # 게이지 차트 생성 (변수 분리)
-                gauge_color = get_color(final_score)
-                fig = go.Figure(go.Indicator(
-                    mode = "gauge+number",
-                    value = final_score,
-                    domain = {'x': [0, 1], 'y': [0, 1]},
-                    title = {'text': "<b>Quant Score</b>", 'font': {'size': 24}},
-                    gauge = {
-                        'axis': {'range': [0, 100]},
-                        'bar': {'color': gauge_color},
-                        'steps': [
-                            {'range': [0, 50], 'color': '#ffebee'},
-                            {'range': [50, 80], 'color': '#fffde7'},
-                            {'range': [80, 100], 'color': '#e8f5e9'}],
-                    }
-                ))
-                fig.update_layout(height=280, margin=dict(t=50, b=20, l=30, r=30))
-                st.plotly_chart(fig, use_container_width=True)
+    # 점수 계산
+    res = calculate_scores(info, stock)
+    final_score = res["final"]
+    scores = res["scores"]
+    details = res["details"]
+    
+    # UI 표시
+    st.markdown(f"## {info.get('shortName')} ({ticker})")
+    
+    # 헤더 정보
+    h1, h2, h3, h4 = st.columns(4)
+    cur = info.get('currentPrice')
+    tar = info.get('targetMeanPrice')
+    
+    h1.metric("Current Price", f"${cur}")
+    if tar:
+        up = ((tar - cur) / cur) * 100
+        h2.metric("Target Price", f"${tar}", f"{up:+.1f}%")
+    else:
+        h2.metric("Target Price", "N/A")
+    h3.metric("Market Cap", format_market_cap(info.get('marketCap')))
+    h4.metric("Sector", info.get('sector', 'N/A'))
+    
+    st.divider()
 
-            with c_right:
-                # 매수 의견 결정
-                if final_score >= 80:
-                    rec_text = "STRONG BUY"
-                    rec_sub = "강력 매수 추천"
-                    rec_bg = "#00C853"
-                elif final_score >= 60:
-                    rec_text = "BUY"
-                    rec_sub = "매수 고려"
-                    rec_bg = "#64DD17"
-                elif final_score <= 40:
-                    rec_text = "SELL"
-                    rec_sub = "매도/비중 축소"
-                    rec_bg = "#FF3D00"
-                else:
-                    rec_text = "HOLD"
-                    rec_sub = "관망 필요"
-                    rec_bg = "#FFD600"
-                
-                # Insight 텍스트 (변수 분리)
-                insight_text
+    # 차트 및 추천
+    c_left, c_right = st.columns([1, 1])
+    
+    with c_left:
+        gauge_color = get_color(final_score)
+        fig = go.Figure(go.Indicator(
+            mode = "gauge+number",
+            value = final_score,
+            title = {'text': "<b>Quant Score</b>", 'font': {'size': 24}},
+            gauge = {
+                'axis':
