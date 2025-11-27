@@ -105,23 +105,71 @@ def get_grade(score):
     elif score >= 40: return "D"
     else: return "F"
 
-# --- 4. 데이터 분석 엔진 ---
+# --- 4. 데이터 분석 엔진 (에러 방지를 위해 try 제거) ---
 def analyze_data(ticker):
-    try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        
-        if 'currentPrice' not in info:
-            return None
+    # 주식 객체 생성
+    stock = yf.Ticker(ticker)
+    info = stock.info
+    
+    # 필수 데이터 체크
+    if 'currentPrice' not in info:
+        return None
 
-        # 1. Valuation
-        peg = info.get('pegRatio')
-        per = info.get('forwardPE')
-        ps = info.get('priceToSalesTrailing12Months')
-        
-        val_score = 50
-        val_detail = "N/A"
-        
-        if peg is not None:
-            ratio = peg / 1.0
-            if ratio <= 0.5: val_score = 10
+    # [1] Valuation
+    peg = info.get('pegRatio')
+    per = info.get('forwardPE')
+    ps = info.get('priceToSalesTrailing12Months')
+    
+    val_score = 50
+    val_detail = "N/A"
+    
+    # 평가 로직 (들여쓰기 주의)
+    if peg is not None:
+        ratio = peg / 1.0
+        if ratio <= 0.5: val_score = 100
+        elif ratio <= 0.8: val_score = 90
+        elif ratio <= 1.0: val_score = 80
+        elif ratio <= 1.5: val_score = 60
+        elif ratio <= 2.0: val_score = 40
+        else: val_score = 20
+        val_detail = f"PEG: {peg:.2f}"
+    elif per is not None:
+        ratio = per / 20.0
+        if ratio <= 0.5: val_score = 100
+        elif ratio <= 0.8: val_score = 90
+        elif ratio <= 1.0: val_score = 80
+        elif ratio <= 1.5: val_score = 60
+        elif ratio <= 2.0: val_score = 40
+        else: val_score = 20
+        val_detail = f"P/E: {per:.1f}"
+    elif ps is not None:
+        ratio = ps / 5.0
+        if ratio <= 0.5: val_score = 100
+        elif ratio <= 0.8: val_score = 90
+        elif ratio <= 1.0: val_score = 80
+        elif ratio <= 1.5: val_score = 60
+        elif ratio <= 2.0: val_score = 40
+        else: val_score = 20
+        val_detail = f"P/S: {ps:.1f}"
+
+    # [2] Profitability
+    gm = info.get('grossMargins', 0) * 100
+    prof_score = min(100, max(20, (gm / 50) * 80 + 20))
+    
+    # [3] Growth
+    rev_g = info.get('revenueGrowth', 0) * 100
+    grow_score = min(100, max(20, (rev_g / 20) * 80 + 20))
+    
+    # [4] Momentum
+    mom_val = 0
+    mom_score = 50
+    # 모멘텀 계산은 별도로 예외 처리 (데이터 없을 수 있음)
+    try:
+        hist = stock.history(period="1y")
+        if not hist.empty:
+            start_p = hist['Close'].iloc[0]
+            end_p = hist['Close'].iloc[-1]
+            mom_val = ((end_p - start_p) / start_p) * 100
+            mom_score = min(100, max(20, (mom_val / 40) * 60 + 40))
+    except:
+        pass
