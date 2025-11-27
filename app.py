@@ -4,48 +4,25 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 
-# --- 1. 페이지 설정 ---
+# --- 1. 앱 설정 ---
 st.set_page_config(layout="wide", page_title="Insight Alpha")
 
-# --- 2. CSS 스타일 ---
+# --- 2. 스타일 설정 (에러 방지를 위해 한 줄로 처리) ---
 st.markdown("""
 <style>
     .main { background-color: #ffffff; color: #333; }
-    .ai-box {
-        background-color: #f1f8ff;
-        border-left: 6px solid #2196F3;
-        padding: 20px;
-        border-radius: 10px;
-        font-size: 18px;
-        font-weight: 500;
-        margin: 20px 0;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-    }
-    .factor-card {
-        background-color: #fafafa;
-        border: 1px solid #eee;
-        border-radius: 10px;
-        padding: 15px;
-        text-align: center;
-        transition: transform 0.2s;
-    }
-    .factor-card:hover { transform: translateY(-5px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
-    .grade-badge {
-        display: inline-block;
-        padding: 5px 15px;
-        border-radius: 20px;
-        color: white;
-        font-weight: bold;
-        font-size: 24px;
-        margin-top: 10px;
-    }
+    .ai-box { background-color: #f1f8ff; border-left: 6px solid #2196F3; padding: 20px; border-radius: 10px; margin: 20px 0; }
+    .factor-card { background-color: #fafafa; border: 1px solid #eee; border-radius: 10px; padding: 15px; text-align: center; }
+    .grade-badge { display: inline-block; padding: 5px 15px; border-radius: 20px; color: white; font-weight: bold; font-size: 24px; margin-top: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 분석 로직 ---
+# --- 3. 분석 함수 ---
 def assign_grade(value, metric):
-    if value is None or np.isnan(value): return "N/A"
+    if value is None or np.isnan(value):
+        return "N/A"
     
+    # 벤치마크 기준
     benchmarks = {
         "PEG Ratio": [0.8, 1.2, 1.8, 2.5],
         "P/E (Fwd)": [15, 20, 25, 35],
@@ -93,31 +70,42 @@ def analyze_stock(ticker):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        if 'currentPrice' not in info: return None
         
-        metrics = {
-            "PEG Ratio": info.get('pegRatio'),
-            "P/E (Fwd)": info.get('forwardPE'),
-            "EV/EBITDA": info.get('enterpriseToEbitda'),
-            "P/FCF": (info.get('marketCap',0)/info.get('freeCashflow',1)) if info.get('freeCashflow') else None,
-            "Rev Growth": info.get('revenueGrowth', 0) * 100,
-            "EPS Growth": info.get('earningsGrowth', 0) * 100,
-            "Gross Margin": info.get('grossMargins', 0) * 100,
-            "Net Margin": info.get('profitMargins', 0) * 100,
-            "ROE": info.get('returnOnEquity', 0) * 100,
-            "Debt/Equity": info.get('debtToEquity'),
-            "Quick Ratio": info.get('quickRatio'),
-            "Perf 1Y": 10.0
-        }
+        if 'currentPrice' not in info:
+            return None
+        
+        # 데이터 안전 추출
+        metrics = {}
+        metrics["PEG Ratio"] = info.get('pegRatio')
+        metrics["P/E (Fwd)"] = info.get('forwardPE')
+        metrics["EV/EBITDA"] = info.get('enterpriseToEbitda')
+        
+        m_cap = info.get('marketCap', 0)
+        fcf = info.get('freeCashflow')
+        if fcf:
+            metrics["P/FCF"] = m_cap / fcf
+        else:
+            metrics["P/FCF"] = None
+            
+        metrics["Rev Growth"] = info.get('revenueGrowth', 0) * 100
+        metrics["EPS Growth"] = info.get('earningsGrowth', 0) * 100
+        metrics["Gross Margin"] = info.get('grossMargins', 0) * 100
+        metrics["Net Margin"] = info.get('profitMargins', 0) * 100
+        metrics["ROE"] = info.get('returnOnEquity', 0) * 100
+        metrics["Debt/Equity"] = info.get('debtToEquity')
+        metrics["Quick Ratio"] = info.get('quickRatio')
+        metrics["Perf 1Y"] = 10.0 # 기본값
         
         try:
             hist = stock.history(period="1y")
             if not hist.empty:
-                s = hist['Close'].iloc[0]
-                e = hist['Close'].iloc[-1]
-                metrics["Perf 1Y"] = ((e - s) / s) * 100
-        except: pass
+                s_price = hist['Close'].iloc[0]
+                e_price = hist['Close'].iloc[-1]
+                metrics["Perf 1Y"] = ((e_price - s_price) / s_price) * 100
+        except:
+            pass
 
+        # 팩터 계산
         factors = {
             "Valuation": ["PEG Ratio", "P/E (Fwd)", "EV/EBITDA", "P/FCF"],
             "Growth": ["Rev Growth", "EPS Growth"],
@@ -140,6 +128,7 @@ def analyze_stock(ticker):
                 f_count += 1
             
             avg = f_score / f_count if f_count else 50
+            
             if avg >= 90: grade = "A+"
             elif avg >= 80: grade = "A"
             elif avg >= 70: grade = "B"
@@ -160,16 +149,10 @@ def analyze_stock(ticker):
             "final_score": int(final_score)
         }
 
-    except Exception as e:
-        print(e)
+    except Exception:
         return None
 
+# --- 5. 코멘트 생성 (문법 오류 방지를 위해 안전하게 작성) ---
 def generate_comment(score, grades, ticker):
-    if score >= 85:
-        return f"🔥 **Strong Buy:** {ticker}는 완벽에 가깝습니다. 성장성, 수익성, 밸류에이션 박자가 맞습니다."
-    elif score >= 70:
-        if grades['Valuation']['grade'] in ['D', 'F']:
-            return f"💎 **Buy (High Price):** 회사는 훌륭하지만(Quality A) 가격이 비쌉니다. 장기 투자는 유효합니다."
-        else:
-            return f"✅ **Buy:** 전반적으로 준수합니다. 치명적인 약점이 없고 합리적입니다."
-    elif score >=
+    val_grade = grades['Valuation']['grade']
+    prof_grade
