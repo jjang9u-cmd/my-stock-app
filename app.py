@@ -7,12 +7,10 @@ import plotly.graph_objects as go
 # --- 1. 앱 설정 ---
 st.set_page_config(layout="wide", page_title="Insight Alpha Pro")
 
-# --- 2. CSS 스타일 (가독성 & 디자인 강화) ---
+# --- 2. CSS 스타일 ---
 st.markdown("""
 <style>
     .main { background-color: #ffffff; color: #333; }
-    
-    /* 추천 박스 디자인 */
     .rec-box {
         padding: 25px;
         border-radius: 15px;
@@ -23,8 +21,6 @@ st.markdown("""
     }
     .rec-title { font-size: 36px; font-weight: 900; margin-bottom: 5px; text-transform: uppercase; text-shadow: 2px 2px 4px rgba(0,0,0,0.2); }
     .rec-desc { font-size: 20px; font-weight: 600; opacity: 0.9; }
-    
-    /* AI 인사이트 박스 */
     .insight-box {
         background-color: #f8f9fa;
         border-left: 5px solid #333;
@@ -34,8 +30,6 @@ st.markdown("""
         line-height: 1.6;
         color: #444;
     }
-
-    /* 팩터 카드 디자인 */
     .metric-card {
         background-color: #ffffff;
         border: 1px solid #e0e0e0;
@@ -47,11 +41,8 @@ st.markdown("""
         transition: transform 0.2s;
     }
     .metric-card:hover { transform: translateY(-5px); }
-    
     .factor-title { font-size: 14px; color: #666; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; }
     .factor-value { font-size: 13px; color: #888; margin-top: 8px; }
-    
-    /* 등급 뱃지 */
     .grade-badge {
         display: inline-block;
         width: 50px;
@@ -64,8 +55,6 @@ st.markdown("""
         text-align: center;
         box-shadow: 0 3px 6px rgba(0,0,0,0.15);
     }
-    
-    /* 버튼 스타일 */
     .stButton>button {
         width: 100%;
         background-color: #111;
@@ -75,21 +64,20 @@ st.markdown("""
         padding: 10px 0;
     }
     .stButton>button:hover { background-color: #333; color: white; }
-    
-    /* 푸터 스타일 */
     .footer {
         text-align: center;
-        margin-top: 50px;
+        margin-top: 80px;
         padding-top: 20px;
         border-top: 1px solid #eee;
-        font-size: 14px;
         color: #888;
-        font-weight: bold;
+        font-weight: 900;
+        font-size: 14px;
+        letter-spacing: 1px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 유틸리티 함수 ---
+# --- 3. 헬퍼 함수 ---
 def format_large_number(num):
     if num is None: return "N/A"
     if num >= 1e12: return f"${num/1e12:.2f}T"
@@ -98,9 +86,9 @@ def format_large_number(num):
     else: return f"${num:,.0f}"
 
 def get_color(score):
-    if score >= 80: return "#00C853" # Green
-    elif score >= 60: return "#FFD600" # Yellow
-    else: return "#FF3D00" # Red
+    if score >= 80: return "#00C853"
+    elif score >= 60: return "#FFD600"
+    else: return "#FF3D00"
 
 def get_grade_color(grade):
     if "A" in grade: return "#00C853"
@@ -117,5 +105,23 @@ def get_grade(score):
     elif score >= 40: return "D"
     else: return "F"
 
-# --- 4. 데이터 분석 엔진 (Multi-Factor Model) ---
-def
+# --- 4. 데이터 분석 엔진 ---
+def analyze_data(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        
+        if 'currentPrice' not in info:
+            return None
+
+        # 1. Valuation
+        peg = info.get('pegRatio')
+        per = info.get('forwardPE')
+        ps = info.get('priceToSalesTrailing12Months')
+        
+        val_score = 50
+        val_detail = "N/A"
+        
+        if peg is not None:
+            ratio = peg / 1.0
+            if ratio <= 0.5: val_score = 10
