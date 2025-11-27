@@ -1,238 +1,210 @@
 import streamlit as st
 import yfinance as yf
+import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 
-# --- 1. 앱 기본 설정 ---
-st.set_page_config(layout="wide", page_title="Insight Alpha")
+# --- 1. 페이지 설정 ---
+st.set_page_config(layout="wide", page_title="Insight Alpha: Visual Quant")
 
-# --- 2. CSS 스타일 설정 ---
+# --- 2. CSS 스타일 (게이지 & 코멘트 디자인 강화) ---
 st.markdown("""
 <style>
-    .metric-card {
-        background-color: #262730;
-        padding: 15px;
-        border-radius: 8px;
-        border: 1px solid #444;
-        text-align: center;
-        margin-bottom: 10px;
-    }
-    .ai-comment-box {
-        background-color: #f0f2f6;
-        color: #31333F;
+    .main { background-color: #ffffff; color: #333; }
+    
+    /* AI 코멘트 박스 */
+    .ai-box {
+        background-color: #f1f8ff;
+        border-left: 6px solid #2196F3;
         padding: 20px;
         border-radius: 10px;
-        border-left: 5px solid #ff4b4b;
-        font-style: italic;
-        font-size: 16px;
+        font-size: 18px;
+        font-weight: 500;
         margin: 20px 0;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
     }
-    .sector-tag {
-        background-color: #4CAF50;
+    
+    /* 팩터 카드 디자인 */
+    .factor-card {
+        background-color: #fafafa;
+        border: 1px solid #eee;
+        border-radius: 10px;
+        padding: 15px;
+        text-align: center;
+        transition: transform 0.2s;
+    }
+    .factor-card:hover { transform: translateY(-5px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+    
+    /* 등급 뱃지 */
+    .grade-badge {
+        display: inline-block;
+        padding: 5px 15px;
+        border-radius: 20px;
         color: white;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 12px;
+        font-weight: bold;
+        font-size: 24px;
+        margin-top: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 섹터별 기준값 설정 ---
-SECTOR_BENCHMARKS = {
-    "Technology": {"margin": 40, "peg": 1.5, "fcf_yield": 3.0},
-    "Consumer Cyclical": {"margin": 15, "peg": 1.2, "fcf_yield": 4.0},
-    "Consumer Defensive": {"margin": 10, "peg": 2.0, "fcf_yield": 3.0},
-    "Healthcare": {"margin": 50, "peg": 1.5, "fcf_yield": 2.5},
-    "Financial Services": {"margin": 20, "peg": 1.2, "fcf_yield": 5.0},
-    "Energy": {"margin": 20, "peg": 1.0, "fcf_yield": 8.0},
-    "Default": {"margin": 30, "peg": 1.5, "fcf_yield": 3.5}
-}
-
-# --- 4. AI 코멘트 함수 ---
-def get_ai_comment(score, symbol, grades):
-    if score >= 90:
-        return f"🔥 **강력 추천:** '{symbol}은(는) 월가 펀드매니저들도 탐낼만한 완벽한 성적표입니다.'"
-    elif score >= 80:
-        return f"💎 **매수 적기:** '{symbol}의 숫자는 탄탄합니다. 다만 시장 상황에 따라 분할 매수로 접근하세요.'"
-    elif score >= 60:
-        if grades['Valuation'] == 'F':
-            return f"⚠️ **고평가 주의:** '회사는 좋지만 주가가 너무 비쌉니다. {symbol}은(는) 야수의 심장만 접근하세요.'"
-        elif grades['Profitability'] == 'F':
-            return f"⚠️ **수익성 경고:** '매출은 나오는데 마진이 너무 박합니다. 경영진의 효율성 개선이 필요합니다.'"
-        else:
-            return f"👀 **관망 필요:** '나쁘진 않지만, 지금 당장 매수할 만큼 매력적인 한 방이 부족합니다.'"
-    elif score >= 40:
-        return f"⛔ **투자 주의:** '주가는 오를지 몰라도 펀더멘털 점수는 줄 수 없습니다. 리스크가 큽니다.'"
+# --- 3. 정밀 분석 로직 (월가 기준) ---
+def assign_grade(value, metric):
+    if value is None or np.isnan(value): return "N/A"
+    
+    # [월가 벤치마크 기준표]
+    # (Metric: [A기준, B기준, C기준, D기준])
+    benchmarks = {
+        # Valuation (Lower is better)
+        "PEG Ratio": [0.8, 1.2, 1.8, 2.5],
+        "P/E (Fwd)": [15, 20, 25, 35],
+        "EV/EBITDA": [10, 15, 20, 25],
+        "P/FCF": [15, 20, 25, 35],
+        
+        # Growth (Higher is better)
+        "Rev Growth": [20, 10, 5, 0],
+        "EPS Growth": [25, 15, 5, 0],
+        
+        # Profitability (Higher is better)
+        "Gross Margin": [50, 40, 30, 15],
+        "Net Margin": [20, 15, 8, 3],
+        "ROE": [20, 15, 10, 5],
+        
+        # Momentum (Higher is better)
+        "Perf 1Y": [40, 20, 5, -10],
+        
+        # Safety (Conservative)
+        "Debt/Equity": [50, 100, 150, 200], # Lower is better
+        "Quick Ratio": [1.5, 1.0, 0.8, 0.5] # Higher is better
+    }
+    
+    lower_better = ["PEG Ratio", "P/E (Fwd)", "EV/EBITDA", "P/FCF", "Debt/Equity"]
+    
+    criteria = benchmarks.get(metric, [0, 0, 0, 0])
+    
+    if metric in lower_better:
+        if value <= criteria[0]: return "A+"
+        elif value <= criteria[0]*1.2: return "A"
+        elif value <= criteria[1]: return "B"
+        elif value <= criteria[2]: return "C"
+        elif value <= criteria[3]: return "D"
+        else: return "F"
     else:
-        return f"🗑️ **매도 의견:** '이 주식을 사는 건 돈을 태우는 것과 같습니다. 재무제표 상태가 매우 좋지 않습니다.'"
+        if value >= criteria[0]: return "A+"
+        elif value >= criteria[0]*0.8: return "A"
+        elif value >= criteria[1]: return "B"
+        elif value >= criteria[2]: return "C"
+        elif value >= criteria[3]: return "D"
+        else: return "F"
 
-# --- 5. 분석 엔진 ---
-def analyze_stock_pro(ticker):
+def grade_to_score(grade):
+    mapping = {"A+": 100, "A": 90, "B": 80, "C": 60, "D": 40, "F": 20, "N/A": 50}
+    return mapping.get(grade, 50)
+
+def get_color(score):
+    if score >= 80: return "#00C853" # Green
+    elif score >= 60: return "#FFD600" # Yellow
+    else: return "#FF3D00" # Red
+
+# --- 4. 데이터 엔진 ---
+def analyze_stock(ticker):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
+        if 'currentPrice' not in info: return None
         
-        if 'currentPrice' not in info:
-            return None
-
-        # 섹터 확인
-        sector = info.get('sector', 'Default')
-        if sector not in SECTOR_BENCHMARKS:
-            sector = 'Default'
-        bm = SECTOR_BENCHMARKS[sector]
-
-        # 데이터 추출
-        market_cap = info.get('marketCap', 0)
-        price = info.get('currentPrice', 0)
-        fcf = info.get('freeCashflow', 0)
-        
-        fcf_yield = 0
-        if market_cap > 0 and fcf:
-            fcf_yield = (fcf / market_cap) * 100
-        
-        peg = info.get('pegRatio', None)
-        gross_margin = info.get('grossMargins', 0) * 100
-        oper_margin = info.get('operatingMargins', 0) * 100
-        roe = info.get('returnOnEquity', 0) * 100
-        
-        op_cash = info.get('operatingCashflow', 0)
-        net_income = info.get('netIncomeToCommon', 0)
-        earnings_quality = True if op_cash >= net_income else False
-
-        rev_growth = info.get('revenueGrowth', 0) * 100
-        target_mean = info.get('targetMeanPrice', price)
-        
-        upside = 0
-        if price > 0:
-            upside = ((target_mean - price) / price) * 100
-
-        # 점수 계산
-        score = 0
-        
-        # [A] Valuation
-        val_score = 0
-        if peg:
-            if peg <= bm['peg'] * 0.8: val_score += 15
-            elif peg <= bm['peg']: val_score += 10
-            elif peg <= bm['peg'] * 1.5: val_score += 5
-        
-        if fcf_yield >= bm['fcf_yield'] * 1.5: val_score += 15
-        elif fcf_yield >= bm['fcf_yield']: val_score += 10
-        elif fcf_yield > 0: val_score += 5
-        score += val_score
-
-        # [B] Profitability
-        prof_score = 0
-        if gross_margin >= bm['margin']: prof_score += 10
-        if oper_margin >= 10: prof_score += 10
-        if roe >= 15: prof_score += 10
-        score += prof_score
-
-        # [C] Safety
-        safe_score = 0
-        if earnings_quality: safe_score += 10
-        else: safe_score -= 5
-        
-        debt_ratio = info.get('debtToEquity', 100)
-        if debt_ratio < 150: safe_score += 10
-        score += safe_score
-
-        # [D] Growth
-        grow_score = 0
-        if rev_growth >= 10: grow_score += 10
-        elif rev_growth > 0: grow_score += 5
-        
-        if upside >= 15: grow_score += 10
-        elif upside > 0: grow_score += 5
-        score += grow_score
-        
-        score = max(0, min(100, score))
-
-        # 등급 판정
-        val_grade = "F"
-        if val_score >= 20: val_grade = "A"
-        elif val_score >= 10: val_grade = "B"
-        
-        prof_grade = "F"
-        if prof_score >= 25: prof_grade = "A"
-        elif prof_score >= 15: prof_grade = "B"
-        elif prof_score >= 10: prof_grade = "C"
-
-        grades = {
-            "Valuation": val_grade,
-            "Profitability": prof_grade
+        # 데이터 추출 (안전 처리)
+        metrics = {
+            "PEG Ratio": info.get('pegRatio'),
+            "P/E (Fwd)": info.get('forwardPE'),
+            "EV/EBITDA": info.get('enterpriseToEbitda'),
+            "P/FCF": (info.get('marketCap',0)/info.get('freeCashflow',1)) if info.get('freeCashflow') else None,
+            "Rev Growth": info.get('revenueGrowth', 0) * 100,
+            "EPS Growth": info.get('earningsGrowth', 0) * 100,
+            "Gross Margin": info.get('grossMargins', 0) * 100,
+            "Net Margin": info.get('profitMargins', 0) * 100,
+            "ROE": info.get('returnOnEquity', 0) * 100,
+            "Debt/Equity": info.get('debtToEquity'),
+            "Quick Ratio": info.get('quickRatio'),
+            "Perf 1Y": 10.0 # 기본값 (History 호출 부하 방지)
         }
         
-        target_margin = bm.get('margin', 30)
+        # 모멘텀 계산 시도
+        try:
+            hist = stock.history(period="1y")
+            if not hist.empty:
+                start = hist['Close'].iloc[0]
+                end = hist['Close'].iloc[-1]
+                metrics["Perf 1Y"] = ((end - start) / start) * 100
+        except: pass
+
+        # 팩터별 점수 산출
+        factors = {
+            "Valuation": ["PEG Ratio", "P/E (Fwd)", "EV/EBITDA", "P/FCF"],
+            "Growth": ["Rev Growth", "EPS Growth"],
+            "Profitability": ["Gross Margin", "Net Margin", "ROE"],
+            "Momentum": ["Perf 1Y"],
+            "Safety": ["Debt/Equity", "Quick Ratio"]
+        }
+        
+        factor_grades = {}
+        total_score = 0
+        count = 0
+        
+        for factor, ms in factors.items():
+            f_score = 0
+            f_count = 0
+            for m in ms:
+                val = metrics.get(m)
+                g = assign_grade(val, m)
+                f_score += grade_to_score(g)
+                f_count += 1
+            
+            avg = f_score / f_count if f_count else 50
+            
+            # 등급 환산
+            if avg >= 90: grade = "A+"
+            elif avg >= 80: grade = "A"
+            elif avg >= 70: grade = "B"
+            elif avg >= 60: grade = "C"
+            elif avg >= 40: grade = "D"
+            else: grade = "F"
+            
+            factor_grades[factor] = {"score": avg, "grade": grade}
+            total_score += avg
+            count += 1
+            
+        final_score = total_score / count if count else 0
         
         return {
             "info": info,
-            "score": score,
-            "grades": grades,
-            "metrics": {
-                "PEG": peg if peg else 0,
-                "FCF_Yield": fcf_yield,
-                "G_Margin": gross_margin,
-                "Earn_Qual": "우수" if earnings_quality else "주의",
-                "Upside": upside,
-                "Sector": sector,
-                "Target_Margin": target_margin
-            }
+            "metrics": metrics,
+            "factor_grades": factor_grades,
+            "final_score": int(final_score)
         }
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(e)
         return None
 
-# --- 6. 메인 UI 실행 ---
-st.title("🧠 Insight Alpha: Quant Master")
-st.caption("Wall Street Grade Financial Analysis Engine V4.0")
-
-ticker_input = st.text_input("분석할 티커 (Ticker) 입력:", "").upper()
-
-if st.button("Deep Dive 분석 시작"):
-    if ticker_input:
-        with st.spinner('데이터 분석 중...'):
-            data = analyze_stock_pro(ticker_input)
-            
-        if data:
-            d = data['metrics']
-            info = data['info']
-            score = data['score']
-            
-            st.header(f"{info.get('shortName')} ({ticker_input})")
-            st.markdown(f"<span class='sector-tag'>{d['Sector']} 섹터 적용</span>", unsafe_allow_html=True)
-            
-            # --- 게이지 차트 (에러 방지를 위해 변수 분리) ---
-            bar_color = "#00C853" if score >= 80 else ("#FFD600" if score >= 50 else "#FF3D00")
-            
-            # Plotly 객체 생성 (괄호 에러 방지를 위해 단순화)
-            indicator = go.Indicator(
-                mode = "gauge+number",
-                value = score,
-                title = {'text': "Quant Score"},
-                gauge = {
-                    'axis': {'range': [0, 100]},
-                    'bar': {'color': bar_color},
-                    'steps': [{'range': [0, 100], 'color': "#262730"}]
-                }
-            )
-            fig = go.Figure(indicator)
-            st.plotly_chart(fig, use_container_width=True)
-
-            # AI 코멘트
-            ai_comment = get_ai_comment(score, ticker_input, data['grades'])
-            st.markdown(f"<div class='ai-comment-box'>{ai_comment}</div>", unsafe_allow_html=True)
-
-            # 지표 카드
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("Valuation (PEG)", f"{d['PEG']:.2f}")
-            c2.metric("FCF Yield", f"{d['FCF_Yield']:.1f}%")
-            c3.metric("Gross Margin", f"{d['G_Margin']:.1f}%", f"기준 {d['Target_Margin']}%")
-            c4.metric("이익의 질", d['Earn_Qual'])
-            c5.metric("상승여력", f"{d['Upside']:.1f}%")
-
-            st.divider()
-            st.info("💡 **Tips:** 실시간 분석 데이터입니다. 간혹 데이터가 없는 종목은 분석이 불가능할 수 있습니다.")
-
+# --- 5. AI 코멘트 생성기 (직설 화법) ---
+def generate_comment(score, grades, ticker):
+    if score >= 85:
+        return f"🔥 **Strong Buy:** \"{ticker}는 완벽에 가깝습니다. 성장성, 수익성, 밸류에이션 박자가 척척 맞네요. 월가에서도 'Top Pick'으로 꼽을 만한 퀄리티입니다.\""
+    elif score >= 70:
+        if grades['Valuation']['grade'] in ['D', 'F']:
+            return f"💎 **Buy (but expensive):** \"회사는 정말 훌륭합니다(Quality A). 하지만 가격이 좀 비싸네요. 좋은 물건을 제값 주고 사는 구간입니다. 장기 투자는 OK.\""
         else:
-            st.error("데이터를 불러올 수 없습니다. 티커를 확인해주세요.")
+            return f"✅ **Buy:** \"전반적으로 준수합니다. 치명적인 약점이 없고 밸류에이션도 합리적입니다. 포트폴리오에 담기에 부담 없는 종목입니다.\""
+    elif score >= 50:
+        if grades['Profitability']['grade'] in ['D', 'F']:
+            return f"⚠️ **Hold:** \"매출은 나오는데 남는 게 없습니다. 마진율 개선이 확인되기 전까진 큰 비중을 싣기 어렵습니다.\""
+        elif grades['Growth']['grade'] in ['D', 'F']:
+            return f"🐢 **Hold:** \"돈은 잘 벌지만 성장이 멈췄습니다. 배당주라면 모를까, 시세 차익을 기대하기엔 지루한 싸움이 될 겁니다.\""
+        else:
+            return f"👀 **Neutral:** \"특색이 없습니다. 싸지도 않고, 성장이 빠르지도 않습니다. 더 좋은 대안을 찾아보세요.\""
+    else:
+        return f"⛔ **Sell / Avoid:** \"경고합니다. 펀더멘털이 무너져 있습니다. 지금 들어가는 건 투자가 아니라 도박입니다. 이 종목은 패스하세요.\""
+
+# --- 6. UI 메인 ---
+st.title("🦅 Insight Alpha: Visual
